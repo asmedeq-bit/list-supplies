@@ -178,6 +178,24 @@ tbody td{padding:9px 14px;color:var(--text);max-width:220px;overflow:hidden;text
 .badge-dd{font-size:10px;background:var(--primary-light);color:var(--primary);padding:1px 6px;border-radius:10px;font-weight:600}
 .plain-input{width:100%;padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;color:var(--text);outline:none;transition:border .2s;background:var(--bg)}
 .plain-input:focus{border-color:var(--primary);background:#fff;box-shadow:0 0 0 3px rgba(26,86,219,.08)}
+
+/* ── Auto-calc readonly field ── */
+.plain-input.auto-calc{
+  background:linear-gradient(135deg,#ecfdf5,#f0fdf4);
+  border-color:#6ee7b7;
+  color:#065f46;
+  font-weight:600;
+  cursor:default;
+  position:relative;
+}
+.plain-input.auto-calc:focus{border-color:#10b981;box-shadow:0 0 0 3px rgba(16,185,129,.12)}
+.auto-calc-wrap{position:relative}
+.auto-calc-icon{position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:13px;color:#10b981;pointer-events:none}
+.auto-calc-hint{font-size:10px;color:#059669;margin-top:3px;display:flex;align-items:center;gap:4px;font-weight:500}
+.auto-calc-hint.negative{color:var(--danger)}
+.remaining-expired{color:var(--danger)!important;background:linear-gradient(135deg,#fff1f2,#fee2e2)!important;border-color:#fca5a5!important}
+.remaining-warning{color:#d97706!important;background:linear-gradient(135deg,#fffbeb,#fef3c7)!important;border-color:#fcd34d!important}
+
 .combo-wrap{position:relative}
 .combo-wrap input{width:100%;padding:9px 36px 9px 12px;border:1.5px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;color:var(--text);outline:none;transition:border .2s;background:var(--bg)}
 .combo-wrap input:focus{border-color:var(--primary);background:#fff;box-shadow:0 0 0 3px rgba(26,86,219,.08)}
@@ -234,7 +252,6 @@ tbody td{padding:9px 14px;color:var(--text);max-width:220px;overflow:hidden;text
 .new-cat-btn{display:flex;align-items:center;justify-content:center;gap:8px;padding:11px;width:100%;border:1.5px dashed var(--border);background:transparent;border-radius:10px;cursor:pointer;font-family:inherit;font-size:13px;font-weight:600;color:var(--text-muted);transition:all .15s}
 .new-cat-btn:hover{border-color:var(--success);color:var(--success);background:#ecfdf5}
 
-/* คอลัมน์แบบ grid 2-column เหมือนฟอร์ม "เพิ่มเครื่องมือใหม่" */
 .col-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;max-height:380px;overflow-y:auto;padding:4px 4px 4px 0}
 .col-grid::-webkit-scrollbar{width:5px}.col-grid::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:4px}
 .col-cell{display:flex;flex-direction:column;gap:6px;position:relative}
@@ -533,6 +550,165 @@ const STATIC_DROPDOWNS = {
   'หน่วยนับ':      ['เครื่อง','ชุด','อัน','ตัว','แผ่น','กล่อง'],
 };
 
+// ─── Remaining-life helpers ────────────────────────────────────────────────
+/** คอลัมน์ที่เก็บผลลัพธ์อายุคงเหลือ */
+function isRemainingLifeCol(h){
+  return h==='อายุใช้งาน คงเหลือ (ปี/เดือน)'
+      || h==='อายุใช้งานคงเหลือ(ปี / เดือน)'
+      || h==='อายุใช้งานคงเหลือ (ปี/เดือน)'
+      || h==='อายุคงเหลือ (ปี/เดือน)'
+      || /อายุ.*(คงเหลือ|remaining)/i.test(h);
+}
+
+/** คอลัมน์อายุที่กำหนด (ปี) */
+function isLifespanCol(h){
+  return h==='อายุใช้งานที่กำหนด (ปี)'
+      || h==='อายุใช้งานที่กำหนด(ปี)'
+      || h==='อายุใช้งานที่กำหนด(ปี )'
+      || /อายุ.*กำหนด.*ปี/i.test(h);
+}
+
+/** คอลัมน์วันที่ได้มา */
+function isAcquireDateCol(h){
+  return h==='วันเดือนปี ที่ได้มา'
+      || h==='วันเดือนปีที่ได้มา'
+      || h==='วันเดือนปี ที่ได้มา (ค.ศ.)'
+      || h==='รับมาวันที่'
+      || /วัน.*ได้มา/i.test(h);
+}
+
+/**
+ * คำนวณอายุคงเหลือ
+ * @param {string} dateStr  - วันที่ได้มา (YYYY-MM-DD หรือ DD/MM/YYYY หรือ DD/MM/YYYY(ค.ศ.))
+ * @param {string|number} lifespanYears - อายุที่กำหนด (ปี)
+ * @returns {{ text: string, totalMonths: number }|null}
+ */
+function calcRemainingLife(dateStr, lifespanYears){
+  if(!dateStr || !lifespanYears) return null;
+
+  // แปลงวันที่ — รองรับทั้ง YYYY-MM-DD, DD/MM/YYYY, D/M/YYYY
+  let acquireDate = null;
+  const ds = String(dateStr).trim();
+
+  if(/^\d{4}-\d{2}-\d{2}$/.test(ds)){
+    // YYYY-MM-DD (ISO)
+    acquireDate = new Date(ds + 'T00:00:00');
+  } else if(/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(ds)){
+    // DD/MM/YYYY (Thai common)
+    const parts = ds.split('/');
+    const day = parseInt(parts[0],10);
+    const mon = parseInt(parts[1],10) - 1;
+    let yr  = parseInt(parts[2],10);
+    // ปี พ.ศ. > 2400 → แปลงเป็น ค.ศ.
+    if(yr > 2400) yr -= 543;
+    acquireDate = new Date(yr, mon, day);
+  } else {
+    return null;
+  }
+
+  if(isNaN(acquireDate.getTime())) return null;
+
+  const ls = parseFloat(String(lifespanYears).replace(/[^\d.]/g,''));
+  if(isNaN(ls) || ls <= 0) return null;
+
+  // วันหมดอายุ
+  const expireDate = new Date(acquireDate);
+  expireDate.setFullYear(expireDate.getFullYear() + Math.floor(ls));
+  const fracMonths = Math.round((ls % 1) * 12);
+  if(fracMonths > 0) expireDate.setMonth(expireDate.getMonth() + fracMonths);
+
+  const now = new Date();
+  // ผลต่างเป็นเดือน
+  const diffMs = expireDate.getTime() - now.getTime();
+  const totalMonths = Math.round(diffMs / (1000 * 60 * 60 * 24 * 30.4375));
+
+  if(totalMonths <= 0){
+    // หมดอายุแล้ว
+    const absM = Math.abs(totalMonths);
+    const yr = Math.floor(absM / 12);
+    const mo = absM % 12;
+    const txt = yr > 0 ? `หมดอายุแล้ว ${yr} ปี ${mo} เดือน` : `หมดอายุแล้ว ${mo} เดือน`;
+    return { text: txt, totalMonths };
+  }
+
+  const yr2 = Math.floor(totalMonths / 12);
+  const mo2 = totalMonths % 12;
+  const text = yr2 > 0 ? `${yr2} ปี ${mo2} เดือน` : `${mo2} เดือน`;
+  return { text, totalMonths };
+}
+
+/**
+ * ดึง index ของ field ที่เกี่ยวข้องกับการคำนวณอายุคงเหลือจาก headers
+ */
+function getLifeCalcIndices(headers){
+  return {
+    remainIdx: headers.findIndex(isRemainingLifeCol),
+    lifespanIdx: headers.findIndex(isLifespanCol),
+    dateIdx: headers.findIndex(isAcquireDateCol),
+  };
+}
+
+/**
+ * อ่านค่าจาก form แล้วคำนวณ + อัปเดต field อายุคงเหลือ
+ */
+function autoCalcRemaining(headers){
+  const { remainIdx, lifespanIdx, dateIdx } = getLifeCalcIndices(headers);
+  if(remainIdx < 0 || lifespanIdx < 0 || dateIdx < 0) return;
+
+  const dateVal     = (document.getElementById('f'+dateIdx)||{}).value || '';
+  const lifespanVal = (document.getElementById('f'+lifespanIdx)||{}).value || '';
+  const field       = document.getElementById('f'+remainIdx);
+  if(!field) return;
+
+  const result = calcRemainingLife(dateVal, lifespanVal);
+
+  if(!dateVal || !lifespanVal){
+    field.value = '';
+    updateCalcHint(remainIdx, null);
+    return;
+  }
+
+  if(!result){
+    field.value = 'ไม่สามารถคำนวณได้';
+    updateCalcHint(remainIdx, null);
+    return;
+  }
+
+  field.value = result.text;
+
+  // ปรับสี field ตามสถานะ
+  field.classList.remove('remaining-expired','remaining-warning');
+  if(result.totalMonths <= 0){
+    field.classList.add('remaining-expired');
+  } else if(result.totalMonths <= 12){
+    field.classList.add('remaining-warning');
+  }
+
+  updateCalcHint(remainIdx, result);
+}
+
+function updateCalcHint(idx, result){
+  const hint = document.getElementById('calc-hint-'+idx);
+  if(!hint) return;
+  if(!result){ hint.textContent=''; hint.className='auto-calc-hint'; return; }
+  if(result.totalMonths <= 0){
+    hint.innerHTML = '<i class="fas fa-exclamation-triangle"></i> หมดอายุการใช้งานแล้ว';
+    hint.className = 'auto-calc-hint negative';
+  } else if(result.totalMonths <= 12){
+    hint.innerHTML = '<i class="fas fa-exclamation-circle"></i> ใกล้หมดอายุ (ภายใน 1 ปี)';
+    hint.className = 'auto-calc-hint negative';
+  } else {
+    hint.innerHTML = `<i class="fas fa-magic"></i> คำนวณอัตโนมัติ — หมดอายุ ${formatExpireDate(result)}`;
+    hint.className = 'auto-calc-hint';
+  }
+}
+
+function formatExpireDate(result){
+  // ไม่ return วันที่จริงตรงนี้เพราะไม่ได้เก็บไว้ — แค่บอกเดือนที่เหลือ
+  return result.totalMonths > 0 ? `อีก ${result.totalMonths} เดือน` : '';
+}
+// ──────────────────────────────────────────────────────────────────────────
+
 function isStatusCol(h){ return h==='สถานะภาพพัสดุ'||h==='สถานะ'||h.includes('สถานะภาพ')||h.includes('สถานะ'); }
 function isDeptCol(h){ return h.includes('ใช้ที่แผนก'); }
 function normalizeStatus(v){ v=String(v||'').trim().replace(/\s+$/,''); if(v==='ใช้งานได้'||v==='ปกติ')return 'ใช้ราชการได้'; return v; }
@@ -777,12 +953,15 @@ function renderTableBody(headers, rawQ){
   const pageRows = rows.slice(start, start+S.pageSize);
   const sk = headers.findIndex(isStatusCol);
   const q = rawQ ? rawQ.toLowerCase() : '';
+  // indices for remaining-life display in table
+  const { remainIdx, lifespanIdx, dateIdx } = getLifeCalcIndices(headers);
 
   document.getElementById('table-head').innerHTML = `<tr>
     <th style="width:44px;min-width:44px">#</th>
     ${headers.map((h,i)=>{
       const icon = S.sortCol===i ? (S.sortDir==='asc'?'fa-sort-up':'fa-sort-down') : 'fa-sort';
-      return `<th class="${S.sortCol===i?'sorted':''}" onclick="sortTable(${i})" style="min-width:110px">${escHtml(h)} <i class="fas ${icon} si"></i></th>`;
+      const isRemain = i === remainIdx;
+      return `<th class="${S.sortCol===i?'sorted':''}" onclick="sortTable(${i})" style="min-width:110px${isRemain?';background:#f0fdf4;color:#059669':''}">${escHtml(h)}${isRemain?' <i class="fas fa-magic" style="font-size:9px;opacity:.6" title="คำนวณอัตโนมัติ"></i>':''} <i class="fas ${icon} si"></i></th>`;
     }).join('')}
     <th style="width:90px;min-width:90px">จัดการ</th>
   </tr>`;
@@ -792,7 +971,25 @@ function renderTableBody(headers, rawQ){
       <td style="color:var(--text-muted);font-size:11px;font-weight:600;background:#f8fafc">${start+ri+1}</td>
       ${headers.map((h,ci)=>{
         const val = (it.data && it.data[h] !== undefined && it.data[h] !== null) ? String(it.data[h]) : '';
+
+        // คอลัมน์สถานะ
         if(ci === sk){ const nv = normalizeStatus(val); if(nv) return `<td><span class="status-badge ${getStCls(nv)}">${escHtml(nv)}</span></td>`; return `<td></td>`; }
+
+        // คอลัมน์อายุคงเหลือ — คำนวณ real-time จากข้อมูลใน row
+        if(ci === remainIdx && lifespanIdx >= 0 && dateIdx >= 0){
+          const dateVal2     = (it.data && it.data[headers[dateIdx]]) ? String(it.data[headers[dateIdx]]) : '';
+          const lifespanVal2 = (it.data && it.data[headers[lifespanIdx]]) ? String(it.data[headers[lifespanIdx]]) : '';
+          const res = calcRemainingLife(dateVal2, lifespanVal2);
+          if(res){
+            let cellStyle='background:#f0fdf4;color:#065f46;font-weight:600';
+            if(res.totalMonths <= 0) cellStyle='background:#fff1f2;color:#b91c1c;font-weight:600';
+            else if(res.totalMonths <= 12) cellStyle='background:#fffbeb;color:#b45309;font-weight:600';
+            return `<td style="${cellStyle};white-space:nowrap" title="คำนวณอัตโนมัติ"><i class="fas fa-magic" style="font-size:9px;margin-right:4px;opacity:.5"></i>${escHtml(res.text)}</td>`;
+          }
+          // ถ้าคำนวณไม่ได้ แสดงค่าเดิมจากฐานข้อมูล (fallback)
+          return `<td title="${escHtml(val)}">${q ? highlightMatch(val, rawQ, S.searchMode) : escHtml(val)}</td>`;
+        }
+
         return `<td title="${escHtml(val)}">${q ? highlightMatch(val, rawQ, S.searchMode) : escHtml(val)}</td>`;
       }).join('')}
       <td>
@@ -835,6 +1032,8 @@ function goPage(p){ const pages = Math.ceil(S.filteredRows.length/S.pageSize); i
 function sortTable(ci){ if(S.sortCol === ci) S.sortDir = S.sortDir==='asc'?'desc':'asc'; else { S.sortCol = ci; S.sortDir = 'asc'; } applyFilters(); }
 
 function buildForm(headers, rowArr){
+  const { remainIdx, lifespanIdx, dateIdx } = getLifeCalcIndices(headers);
+
   document.getElementById('modal-form').innerHTML = headers.map((h,i)=>{
     const val = rowArr && rowArr[i] !== undefined ? String(rowArr[i]) : '';
     const isDate = DATE_FIELDS.some(d => h.includes(d.trim()));
@@ -842,18 +1041,69 @@ function buildForm(headers, rowArr){
     const isTxt = TEXT_ONLY_FIELDS.some(d => h.trim() === d.trim());
     const ddOpts = !isTxt && (STATIC_DROPDOWNS[h.trim()] || STATIC_DROPDOWNS[h]) || null;
     const isFirst2 = i < 2;
+    const isRemain = i === remainIdx;
+
     let field = '';
-    if(isDate) field = `<input type="date" class="plain-input" id="f${i}" value="${escHtml(val)}">`;
-    else if(isNum) field = `<input type="number" class="plain-input" id="f${i}" value="${escHtml(val)}" step="any">`;
+
+    if(isRemain){
+      // ── คำนวณค่าเริ่มต้นถ้ามีข้อมูลครบ ──
+      let initVal = val;
+      if(lifespanIdx >= 0 && dateIdx >= 0 && rowArr){
+        const initResult = calcRemainingLife(rowArr[dateIdx], rowArr[lifespanIdx]);
+        if(initResult) initVal = initResult.text;
+      }
+      let extraCls = '';
+      if(initVal && lifespanIdx >= 0 && dateIdx >= 0 && rowArr){
+        const r = calcRemainingLife(rowArr[dateIdx]||'', rowArr[lifespanIdx]||'');
+        if(r){ if(r.totalMonths <= 0) extraCls=' remaining-expired'; else if(r.totalMonths <= 12) extraCls=' remaining-warning'; }
+      }
+      field = `<div class="auto-calc-wrap">
+        <input type="text" class="plain-input auto-calc${extraCls}" id="f${i}" value="${escHtml(initVal)}" readonly
+          placeholder="กรอกวันที่ได้มา + อายุที่กำหนด เพื่อคำนวณอัตโนมัติ"
+          title="คอลัมน์นี้คำนวณอัตโนมัติจากวันที่ได้มา และอายุที่กำหนด">
+        <i class="fas fa-magic auto-calc-icon" title="คำนวณอัตโนมัติ"></i>
+      </div>
+      <div class="auto-calc-hint" id="calc-hint-${i}"></div>`;
+      // trigger hint หลัง render
+      const isFirst2b = isFirst2;
+      return `<div class="form-group ${isFirst2b?'full':''}">
+        <label class="form-label" style="color:#059669"><i class="fas fa-magic" style="font-size:9px"></i> ${escHtml(h)} <span style="font-size:10px;background:#dcfce7;color:#15803d;padding:1px 7px;border-radius:10px;font-weight:600">คำนวณอัตโนมัติ</span></label>
+        ${field}
+      </div>`;
+    }
+
+    if(isDate) field = `<input type="date" class="plain-input" id="f${i}" value="${escHtml(val)}"${i===dateIdx?` onchange="autoCalcRemaining(${JSON.stringify(headers)})"`:''}>`;
+    else if(isNum) field = `<input type="number" class="plain-input" id="f${i}" value="${escHtml(val)}" step="any"${i===lifespanIdx?` oninput="autoCalcRemaining(${JSON.stringify(headers)})"`:''}>`;
     else if(isTxt) field = `<input type="text" class="plain-input" id="f${i}" value="${escHtml(val)}" placeholder="${escHtml(h)}">`;
     else if(ddOpts && ddOpts.length) field = buildCombo(i, val, ddOpts);
     else field = `<input type="text" class="plain-input" id="f${i}" value="${escHtml(val)}" placeholder="${escHtml(h)}">`;
+
+    // ถ้าเป็น field วันที่ได้มาหรืออายุที่กำหนด ให้ใส่ trigger บน combo ด้วย
+    if((i === dateIdx || i === lifespanIdx) && ddOpts && ddOpts.length){
+      // wrap buildCombo ไว้แล้ว ต้องเพิ่ม onchange ผ่าน setAttribute หลัง render
+      // ใช้ data attribute แทน แล้ว bind ทีหลัง
+      field = field.replace('<input type="text"', `<input type="text" data-life-trigger="${i}"`);
+    }
+
     const hasDD = ddOpts && ddOpts.length && !isDate && !isNum && !isTxt;
     return `<div class="form-group ${isFirst2?'full':''}">
       <label class="form-label">${escHtml(h)}${hasDD?'<span class="badge-dd"><i class="fas fa-list" style="font-size:9px"></i> dropdown</span>':''}</label>
       ${field}
     </div>`;
   }).join('');
+
+  // bind trigger events หลัง render
+  if(dateIdx >= 0){
+    const el = document.getElementById('f'+dateIdx);
+    if(el){ el.addEventListener('change', ()=>autoCalcRemaining(headers)); el.addEventListener('input', ()=>autoCalcRemaining(headers)); }
+  }
+  if(lifespanIdx >= 0){
+    const el = document.getElementById('f'+lifespanIdx);
+    if(el){ el.addEventListener('change', ()=>autoCalcRemaining(headers)); el.addEventListener('input', ()=>autoCalcRemaining(headers)); }
+  }
+
+  // คำนวณ hint เริ่มต้น
+  setTimeout(()=>{ if(remainIdx >= 0) autoCalcRemaining(headers); }, 50);
 }
 
 function buildCombo(idx, cur, options){
@@ -877,7 +1127,13 @@ function filterDD(idx){
   if(!vis){ if(!em){ em=document.createElement('div'); em.className='dd-empty'; em.textContent='ไม่พบ (พิมพ์เพิ่มเองได้)'; l.appendChild(em); }} else if(em) em.remove();
   l.classList.add('open'); S.activeDD=document.getElementById('cw'+idx);
 }
-function selectDD(idx,val){ document.getElementById('f'+idx).value=val; closeAllDD(); }
+function selectDD(idx,val){
+  document.getElementById('f'+idx).value=val;
+  closeAllDD();
+  // trigger ถ้าเป็น field ที่เกี่ยวกับการคำนวณ
+  const headers = S.currentCat?.headers;
+  if(headers){ const { lifespanIdx, dateIdx } = getLifeCalcIndices(headers); if(idx===lifespanIdx||idx===dateIdx) autoCalcRemaining(headers); }
+}
 function keyDD(e,idx){
   const l=document.getElementById('dl'+idx); if(!l) return;
   const items=[...l.querySelectorAll('.dd-item:not([style*="none"])')];
@@ -913,6 +1169,18 @@ function closeModal(){ document.getElementById('modal-overlay').classList.remove
 async function saveRow(){
   const cat = S.currentCat; if(!cat) return;
   const headers = cat.headers || [];
+
+  // ── คำนวณอายุคงเหลือก่อน save ──
+  const { remainIdx, lifespanIdx, dateIdx } = getLifeCalcIndices(headers);
+  if(remainIdx >= 0 && lifespanIdx >= 0 && dateIdx >= 0){
+    const dateVal     = (document.getElementById('f'+dateIdx)||{}).value || '';
+    const lifespanVal = (document.getElementById('f'+lifespanIdx)||{}).value || '';
+    const result = calcRemainingLife(dateVal, lifespanVal);
+    const field = document.getElementById('f'+remainIdx);
+    if(field && result) field.value = result.text;
+    else if(field && dateVal && lifespanVal) field.value = 'ไม่สามารถคำนวณได้';
+  }
+
   const arr = headers.map((_,i)=> document.getElementById('f'+i).value);
   const obj = arrToObj(arr, headers);
   const sk = headers.findIndex(isStatusCol), dk = headers.findIndex(isDeptCol);
@@ -1022,30 +1290,14 @@ let newCatCols = [];
 
 function openCreateCategory(){
   document.getElementById('newcat-name').value = '';
-  // คอลัมน์ default ตรงตามฟอร์ม "เพิ่มเครื่องมือใหม่" ของ sheet มาตรฐานในระบบ
   newCatCols = [
-    'รหัสประเภทสินทรัพย์',
-    'หมายเลขทะเบียนครุภัณฑ์',
-    'NVH.No.',
-    'INH.No.',
-    'ใช้ที่แผนก',
-    'ยี่ห้อ',
-    'รุ่น',
-    'บริษัทผู้ขาย',
-    'เลขที่ DTO',
-    'SN',
-    'หมายเลขรหัสสินทรัพย์ (1)',
-    'หมายเลขรหัสสินทรัพย์ (2)',
-    'รายการลักษณะ/คุณสมบัติ ครุภัณฑ์',
-    'รหัสศูนย์ ต้นทุน',
-    'รหัสจังหวัด',
-    'ชื่องบประมาณ',
-    'มูลค่าการได้มา',
-    'หน่วยนับ',
-    'วันเดือนปี ที่ได้มา (ค.ศ.)',
-    'อายุใช้งานที่กำหนด (ปี)',
-    'อายุใช้งาน คงเหลือ (ปี/เดือน)',
-    'สถานะภาพพัสดุ'
+    'รหัสประเภทสินทรัพย์','หมายเลขทะเบียนครุภัณฑ์','NVH.No.','INH.No.',
+    'ใช้ที่แผนก','ยี่ห้อ','รุ่น','บริษัทผู้ขาย','เลขที่ DTO','SN',
+    'หมายเลขรหัสสินทรัพย์ (1)','หมายเลขรหัสสินทรัพย์ (2)',
+    'รายการลักษณะ/คุณสมบัติ ครุภัณฑ์','รหัสศูนย์ ต้นทุน','รหัสจังหวัด',
+    'ชื่องบประมาณ','มูลค่าการได้มา','หน่วยนับ',
+    'วันเดือนปี ที่ได้มา (ค.ศ.)','อายุใช้งานที่กำหนด (ปี)',
+    'อายุใช้งาน คงเหลือ (ปี/เดือน)','สถานะภาพพัสดุ'
   ];
   renderColRows();
   document.getElementById('newcat-overlay').classList.add('show');
@@ -1053,11 +1305,11 @@ function openCreateCategory(){
 }
 function closeCreateCategory(){ document.getElementById('newcat-overlay').classList.remove('show'); }
 
-// ตรวจประเภทคอลัมน์ (ตรงกับ logic ใน buildForm ของหน้า "เพิ่มเครื่องมือใหม่")
 function detectColType(name){
   const h = String(name||'').trim();
   if(!h) return null;
-  // ใช้ logic เดียวกับฟอร์ม "เพิ่มเครื่องมือใหม่" เพื่อให้ตรงกัน
+  if(isRemainingLifeCol(h))
+    return { cls: 'tag-status', text: '⚡ อัตโนมัติ', title: 'คำนวณอัตโนมัติจากวันที่ได้มา + อายุที่กำหนด' };
   if(h === 'สถานะ' || h === 'สถานะภาพพัสดุ' || h.includes('สถานะภาพ') || h.includes('สถานะ'))
     return { cls: 'tag-status', text: '≡ สถานะ', title: 'มี dropdown สถานะ + ใช้ filter ได้' };
   if(h.includes('ใช้ที่แผนก'))
@@ -1107,10 +1359,8 @@ function updateColTag(idx){
   const oldTag = cell.querySelector('.col-cell-tag');
   if(oldTag) oldTag.remove();
   const name = newCatCols[idx];
-  // อัปเดต label text ให้ตามชื่อคอลัมน์ที่พิมพ์ (เหมือน "เพิ่มเครื่องมือใหม่")
   const lbl = document.getElementById('nlbl'+idx);
   if(lbl) lbl.textContent = (name && name.trim()) ? name : `คอลัมน์ที่ ${idx+1}`;
-  // เพิ่ม tag ใหม่ถ้า detect ได้
   const t = detectColType(name);
   if(t){
     const tag = document.createElement('span');
@@ -1147,11 +1397,9 @@ function colKey(e, idx){
 async function confirmCreateCategory(){
   const name = document.getElementById('newcat-name').value.trim();
   if(!name){ toast('กรุณากรอกชื่อประเภทพัสดุ','error'); document.getElementById('newcat-name').focus(); return; }
-  // sync จาก input ทุกช่อง (กันกรณี oninput ไม่ทัน)
   newCatCols.forEach((_, i) => { const inp = document.getElementById('ncol'+i); if(inp) newCatCols[i] = inp.value; });
   const headers = newCatCols.map(s => String(s||'').trim()).filter(Boolean);
   if(!headers.length){ toast('กรุณาเพิ่มอย่างน้อย 1 คอลัมน์','error'); return; }
-  // เช็คชื่อซ้ำ
   const dup = headers.filter((h,i) => headers.indexOf(h) !== i);
   if(dup.length){ toast('ชื่อคอลัมน์ซ้ำ: '+dup[0],'error'); return; }
   showLoading(true);
@@ -1174,7 +1422,16 @@ async function confirmCreateCategory(){
 function exportData(type){
   const cat = S.currentCat; if(!cat) return;
   const headers = cat.headers || [];
-  const rows = S.filteredRows.map(it => rowToArr(it, headers));
+  const { remainIdx, lifespanIdx, dateIdx } = getLifeCalcIndices(headers);
+  // export พร้อมค่าคำนวณล่าสุด
+  const rows = S.filteredRows.map(it => {
+    const arr = rowToArr(it, headers);
+    if(remainIdx >= 0 && lifespanIdx >= 0 && dateIdx >= 0){
+      const res = calcRemainingLife(arr[dateIdx], arr[lifespanIdx]);
+      if(res) arr[remainIdx] = res.text;
+    }
+    return arr;
+  });
   const name = cat.name;
   if(type==='csv'){
     let csv = '﻿' + headers.join(',') + '\n';
@@ -1269,12 +1526,15 @@ function renderSmTable(){
 
   const baseHeaders = pageRows[0]?.headers || smState.smRows[0]?.headers || [];
   const skHead = baseHeaders.findIndex(isStatusCol);
+  const { remainIdx: smRemainIdx, lifespanIdx: smLsIdx, dateIdx: smDtIdx } = getLifeCalcIndices(baseHeaders);
+
   document.getElementById('sm-thead').innerHTML = `<tr>
     <th style="width:40px;position:sticky;top:0;background:#f8fafc;z-index:25;border-bottom:2px solid var(--border);padding:10px 12px;font-size:12px;font-weight:700;color:var(--text-muted)">#</th>
     <th style="position:sticky;top:0;background:#f8fafc;z-index:20;border-bottom:2px solid var(--border);padding:10px 14px;font-size:12px;font-weight:700;color:var(--text-muted);white-space:nowrap;min-width:100px">ประเภท/ชีท</th>
     ${baseHeaders.map((h,i)=>{
       const isStatus = i===skHead;
-      return `<th style="position:sticky;top:0;background:${isStatus?'#f0fdf4':'#f8fafc'};z-index:20;border-bottom:2px solid ${isStatus?'#10b981':'var(--border)'};padding:10px 14px;font-size:12px;font-weight:700;color:${isStatus?'#059669':'var(--text-muted)'};white-space:nowrap;min-width:100px">${escHtml(h)}</th>`;
+      const isRemain = i===smRemainIdx;
+      return `<th style="position:sticky;top:0;background:${isStatus?'#f0fdf4':isRemain?'#f0fdf4':'#f8fafc'};z-index:20;border-bottom:2px solid ${isStatus?'#10b981':isRemain?'#6ee7b7':'var(--border)'};padding:10px 14px;font-size:12px;font-weight:700;color:${isStatus?'#059669':isRemain?'#059669':'var(--text-muted)'};white-space:nowrap;min-width:100px">${escHtml(h)}${isRemain?' <i class="fas fa-magic" style="font-size:9px;opacity:.6"></i>':''}</th>`;
     }).join('')}
     <th style="position:sticky;top:0;background:#f8fafc;z-index:20;border-bottom:2px solid var(--border);padding:10px 14px;font-size:12px;font-weight:700;color:var(--text-muted);white-space:nowrap;width:60px">แก้ไข</th>
   </tr>`;
@@ -1282,14 +1542,26 @@ function renderSmTable(){
   if(!pageRows.length){
     document.getElementById('sm-tbody').innerHTML = `<tr><td colspan="999" style="text-align:center;padding:40px;color:var(--text-muted)"><i class="fas fa-inbox" style="font-size:32px;display:block;margin-bottom:10px;opacity:.35"></i>ไม่พบข้อมูล</td></tr>`;
   } else {
-    document.getElementById('sm-tbody').innerHTML = pageRows.map(({item, sheetName, headers, catId}, ri)=>{
-      const sk = headers.findIndex(isStatusCol);
-      const cells = headers.map((h,ci)=>{
+    document.getElementById('sm-tbody').innerHTML = pageRows.map(({item, sheetName, headers: hdrs, catId}, ri)=>{
+      const sk = hdrs.findIndex(isStatusCol);
+      const { remainIdx: rIdx, lifespanIdx: lsIdx, dateIdx: dtIdx } = getLifeCalcIndices(hdrs);
+      const cells = hdrs.map((h,ci)=>{
         let val = item.data?.[h] === undefined ? '' : String(item.data[h]);
         if(ci === sk){
           val = normalizeStatus(val);
           if(val) return `<td style="padding:9px 14px;white-space:nowrap"><span class="status-badge ${getStCls(val)}">${escHtml(val)}</span></td>`;
           return `<td style="padding:9px 14px;white-space:nowrap"><span style="color:var(--warning);font-size:11px;margin-right:6px">ไม่ระบุ</span></td>`;
+        }
+        if(ci === rIdx && lsIdx >= 0 && dtIdx >= 0){
+          const dateVal3 = item.data?.[hdrs[dtIdx]] ? String(item.data[hdrs[dtIdx]]) : '';
+          const lsVal3   = item.data?.[hdrs[lsIdx]]  ? String(item.data[hdrs[lsIdx]])  : '';
+          const res = calcRemainingLife(dateVal3, lsVal3);
+          if(res){
+            let cs = 'background:#f0fdf4;color:#065f46;font-weight:600';
+            if(res.totalMonths <= 0) cs='background:#fff1f2;color:#b91c1c;font-weight:600';
+            else if(res.totalMonths <= 12) cs='background:#fffbeb;color:#b45309;font-weight:600';
+            return `<td style="padding:9px 14px;${cs};white-space:nowrap"><i class="fas fa-magic" style="font-size:9px;margin-right:3px;opacity:.5"></i>${escHtml(res.text)}</td>`;
+          }
         }
         return `<td style="padding:9px 14px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(val)}">${escHtml(val)}</td>`;
       }).join('');
@@ -1337,10 +1609,13 @@ document.getElementById('status-overlay').addEventListener('click', e => { if(e.
 function exportSmCSV(){
   if(!smState.smRows.length) return;
   const baseHeaders = smState.smRows[0].headers;
+  const { remainIdx, lifespanIdx, dateIdx } = getLifeCalcIndices(baseHeaders);
   const headers = ['ประเภท/ชีท', ...baseHeaders];
   let csv = '﻿' + headers.join(',') + '\n';
   smState.smRows.forEach(({item, sheetName, headers: hdrs}) => {
     const arr = rowToArr(item, hdrs);
+    const { remainIdx: ri, lifespanIdx: li, dateIdx: di } = getLifeCalcIndices(hdrs);
+    if(ri >= 0 && li >= 0 && di >= 0){ const res = calcRemainingLife(arr[di], arr[li]); if(res) arr[ri] = res.text; }
     csv += [sheetName, ...arr].map(v => '"'+String(v||'').replace(/"/g,'""')+'"').join(',') + '\n';
   });
   dlBlob(new Blob([csv],{type:'text/csv;charset=utf-8'}), (smState.statusFilter==='__ALL_SHEETS__'?'all':smState.statusFilter)+'.csv');
